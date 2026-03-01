@@ -21,11 +21,14 @@
 - macOS 10.15+
 - Claude Code CLI installed
 - [Homebrew](https://brew.sh)
+- [terminal-notifier](https://github.com/julienXX/terminal-notifier)
+- [jq](https://stedolan.github.io/jq/)
 
-### Install
+### Install via Homebrew (Recommended)
 
 ```bash
-brew install yourusername/tap/claude-notify
+brew tap trisetiohidayat/tap
+brew install claude-notify
 ```
 
 ### Setup
@@ -147,7 +150,7 @@ claude-notify/
 
 ```bash
 # Clone repo
-git clone https://github.com/yourusername/claude-notify.git
+git clone https://github.com/trisetiohidayat/claude-notify.git
 cd claude-notify
 
 # Link for testing
