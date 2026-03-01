@@ -1,0 +1,10 @@
+{
+  "enabled": true,
+  "sound": "Glass",
+  "title": "Claude Code",
+  "message": "Selesai memproses",
+  "hooks": {
+    "stop": true,
+    "pre_tool_use": true
+  }
+}

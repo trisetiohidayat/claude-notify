@@ -1,0 +1,355 @@
+#!/bin/bash
+# Claude Notify CLI Tool
+# Usage: claude-notify [install|uninstall|config|status|enable|disable]
+
+set -e
+
+# Paths
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+LIB_FILE="$PROJECT_DIR/lib/notify.sh"
+CONFIG_FILE="$HOME/.claude-notify/config.json"
+CLAUDE_SETTINGS="$HOME/.claude/settings.json"
+
+# Installation paths (for Homebrew)
+HOMEBREW_PREFIX="$(brew --prefix 2>/dev/null || echo /usr/local)"
+INSTALLED_LIB="$HOMEBREW_PREFIX/lib/claude-notify/notify.sh"
+
+# Use installed lib if exists (for brew install), otherwise use project lib
+if [ -f "$INSTALLED_LIB" ]; then
+    LIB_FILE="$INSTALLED_LIB"
+fi
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Load library
+source "$LIB_FILE"
+
+# Print colored message
+print_msg() {
+    local color="$1"
+    local msg="$2"
+    echo -e "${color}${msg}${NC}"
+}
+
+# Create config directory
+init_config() {
+    local config_dir="$(dirname "$CONFIG_FILE")"
+    mkdir -p "$config_dir"
+
+    if [ ! -f "$CONFIG_FILE" ]; then
+        if [ -f "$PROJECT_DIR/config/default.json" ]; then
+            cp "$PROJECT_DIR/config/default.json" "$CONFIG_FILE"
+        else
+            echo '{"enabled":true,"sound":"Glass","title":"Claude Code","message":"Selesai memproses"}' > "$CONFIG_FILE"
+        fi
+        print_msg "$GREEN" "✅ Config created: $CONFIG_FILE"
+    else
+        print_msg "$YELLOW" "⚠️  Config already exists: $CONFIG_FILE"
+    fi
+}
+
+# Install hooks to Claude settings
+install_hooks() {
+    print_msg "$GREEN" "📦 Installing Claude Notify hooks..."
+
+    # Initialize config
+    init_config
+
+    # Check if Claude settings exists
+    if [ ! -f "$CLAUDE_SETTINGS" ]; then
+        print_msg "$RED" "❌ Claude settings not found: $CLAUDE_SETTINGS"
+        print_msg "$YELLOW" "💡 Make sure Claude Code is installed and has been run at least once"
+        exit 1
+    fi
+
+    # Backup existing settings
+    local backup_file="${CLAUDE_SETTINGS}.backup.$(date +%Y%m%d%H%M%S)"
+    cp "$CLAUDE_SETTINGS" "$backup_file"
+    print_msg "$GREEN" "✅ Backup created: $backup_file"
+
+    # Create hooks directory in project
+    local hooks_dir="$HOME/.claude/hooks"
+    mkdir -p "$hooks_dir"
+
+    # Detect lib path for hook scripts
+    local hook_lib_path="$LIB_FILE"
+    if [ "$LIB_FILE" = "$INSTALLED_LIB" ]; then
+        # For brew install, use the absolute path
+        hook_lib_path="$INSTALLED_LIB"
+    else
+        # For development, use project path
+        hook_lib_path="$PROJECT_DIR/lib/notify.sh"
+    fi
+
+    # Create stop hook script
+    cat > "$hooks_dir/claude-notify-stop.sh" << EOF
+#!/bin/bash
+source "$hook_lib_path"
+send_notification "Claude Code" "Selesai memproses"
+EOF
+
+    # Create input hook script
+    cat > "$hooks_dir/claude-notify-input.sh" << EOF
+#!/bin/bash
+INPUT=\$(cat)
+TOOL_NAME=\$(echo "\$INPUT" | jq -r '.tool_name // empty')
+if [[ "\$TOOL_NAME" == "AskUserQuestion" ]]; then
+    QUESTION=\$(echo "\$INPUT" | jq -r '.tool_input.questions[0].question // "Input needed"')
+    source "$hook_lib_path"
+    send_notification "🤔 Input Needed" "\$QUESTION"
+fi
+exit 0
+EOF
+
+    chmod +x "$hooks_dir/claude-notify-stop.sh"
+    chmod +x "$hooks_dir/claude-notify-input.sh"
+
+    print_msg "$GREEN" "✅ Hook scripts created"
+
+    # Update settings using Python (more reliable for JSON manipulation)
+    python3 << PYTHON_EOF
+import json
+
+with open("$CLAUDE_SETTINGS", 'r') as f:
+    settings = json.load(f)
+
+# Ensure hooks object exists
+if 'hooks' not in settings:
+    settings['hooks'] = {}
+
+# Add Stop hook (remove duplicates first)
+if 'Stop' in settings['hooks']:
+    settings['hooks']['Stop'] = [h for h in settings['hooks']['Stop'] if 'claude-notify' not in str(h.get('command', ''))]
+
+if 'Stop' not in settings['hooks']:
+    settings['hooks']['Stop'] = []
+settings['hooks']['Stop'].append({
+    "hooks": [{
+        "type": "command",
+        "command": "bash $HOME/.claude/hooks/claude-notify-stop.sh",
+        "timeout": 5000
+    }]
+})
+
+# Add PreToolUse hook for AskUserQuestion (remove duplicates first)
+if 'PreToolUse' in settings['hooks']:
+    settings['hooks']['PreToolUse'] = [h for h in settings['hooks']['PreToolUse'] if 'claude-notify' not in str(h.get('command', ''))]
+
+if 'PreToolUse' not in settings['hooks']:
+    settings['hooks']['PreToolUse'] = []
+settings['hooks']['PreToolUse'].append({
+    "matcher": "AskUserQuestion",
+    "hooks": [{
+        "type": "command",
+        "command": "bash $HOME/.claude/hooks/claude-notify-input.sh",
+        "timeout": 5000
+    }]
+})
+
+with open("$CLAUDE_SETTINGS", 'w') as f:
+    json.dump(settings, f, indent=2)
+PYTHON_EOF
+
+    print_msg "$GREEN" "✅ Claude settings updated"
+    print_msg "$GREEN" "🎉 Installation complete!"
+    print_msg "$YELLOW" "💡 Restart Claude Code to activate hooks"
+    print_msg "$YELLOW" "💡 Run 'claude-notify test' to test notifications"
+}
+
+# Uninstall hooks
+uninstall_hooks() {
+    print_msg "$YELLOW" "🗑️  Uninstalling Claude Notify hooks..."
+
+    # Check if Claude settings exists
+    if [ ! -f "$CLAUDE_SETTINGS" ]; then
+        print_msg "$RED" "❌ Claude settings not found"
+        exit 1
+    fi
+
+    # Backup before modifying
+    cp "$CLAUDE_SETTINGS" "${CLAUDE_SETTINGS}.backup.$(date +%Y%m%d%H%M%S)"
+
+    # Remove hook scripts
+    rm -f "$HOME/.claude/hooks/claude-notify-stop.sh"
+    rm -f "$HOME/.claude/hooks/claude-notify-input.sh"
+
+    # Remove hooks from settings
+    python3 << PYTHON_EOF
+import json
+
+with open("$CLAUDE_SETTINGS", 'r') as f:
+    settings = json.load(f)
+
+# Remove claude-notify hooks
+if 'hooks' in settings:
+    if 'Stop' in settings['hooks']:
+        settings['hooks']['Stop'] = [h for h in settings['hooks']['Stop'] if 'claude-notify' not in str(h)]
+    if 'PreToolUse' in settings['hooks']:
+        settings['hooks']['PreToolUse'] = [h for h in settings['hooks']['PreToolUse'] if 'claude-notify' not in str(h)]
+
+with open("$CLAUDE_SETTINGS", 'w') as f:
+    json.dump(settings, f, indent=2)
+PYTHON_EOF
+
+    print_msg "$GREEN" "✅ Hook scripts removed"
+    print_msg "$GREEN" "✅ Hooks removed from Claude settings"
+    print_msg "$YELLOW" "💡 Restart Claude Code to apply changes"
+}
+
+# Show status
+show_status() {
+    print_msg "$GREEN" "📊 Claude Notify Status"
+    echo ""
+
+    # Installation info
+    if [ -f "$INSTALLED_LIB" ]; then
+        print_msg "$GREEN" "✅ Installed via Homebrew"
+        echo "  Library: $INSTALLED_LIB"
+    elif [ -f "$PROJECT_DIR/lib/notify.sh" ]; then
+        print_msg "$YELLOW" "⚠️  Development mode"
+        echo "  Library: $PROJECT_DIR/lib/notify.sh"
+    else
+        print_msg "$RED" "❌ Not installed"
+    fi
+
+    echo ""
+
+    # Config info
+    if [ -f "$CONFIG_FILE" ]; then
+        print_msg "$GREEN" "✅ Config: $CONFIG_FILE"
+        load_config
+        echo "  Enabled: $ENABLED"
+        echo "  Sound: $SOUND"
+        echo "  Title: $TITLE"
+        echo "  Message: $MESSAGE"
+    else
+        print_msg "$YELLOW" "⚠️  No config found (using defaults)"
+    fi
+
+    echo ""
+
+    # Hooks info
+    if [ -f "$CLAUDE_SETTINGS" ]; then
+        if grep -q "claude-notify" "$CLAUDE_SETTINGS" 2>/dev/null; then
+            print_msg "$GREEN" "✅ Hooks installed in Claude settings"
+
+            # Check if hook scripts exist
+            if [ -f "$HOME/.claude/hooks/claude-notify-stop.sh" ]; then
+                echo "  Stop hook: ✓"
+            else
+                echo "  Stop hook: ✗ (missing script)"
+            fi
+
+            if [ -f "$HOME/.claude/hooks/claude-notify-input.sh" ]; then
+                echo "  Input hook: ✓"
+            else
+                echo "  Input hook: ✗ (missing script)"
+            fi
+        else
+            print_msg "$YELLOW" "⚠️  Hooks not installed"
+        fi
+    else
+        print_msg "$RED" "❌ Claude settings not found"
+    fi
+}
+
+# Edit config
+edit_config() {
+    init_config
+    ${EDITOR:-vi} "$CONFIG_FILE"
+    print_msg "$GREEN" "✅ Config updated"
+}
+
+# Enable notifications
+enable_notifications() {
+    init_config
+    python3 -c "import json; d=json.load(open('$CONFIG_FILE')); d['enabled']=True; json.dump(d,open('$CONFIG_FILE','w'), indent=2)"
+    print_msg "$GREEN" "✅ Notifications enabled"
+}
+
+# Disable notifications
+disable_notifications() {
+    if [ -f "$CONFIG_FILE" ]; then
+        python3 -c "import json; d=json.load(open('$CONFIG_FILE')); d['enabled']=False; json.dump(d,open('$CONFIG_FILE','w'), indent=2)"
+        print_msg "$GREEN" "✅ Notifications disabled"
+    else
+        print_msg "$YELLOW" "⚠️  No config found"
+    fi
+}
+
+# Test notification
+test_notification() {
+    print_msg "$GREEN" "🔔 Testing notification..."
+    send_notification "Claude Notify Test" "If you see this, it's working!"
+    print_msg "$GREEN" "✅ Notification sent!"
+}
+
+# Show help
+show_help() {
+    cat << HELP
+Claude Notify - Desktop Notifications for Claude Code
+
+USAGE:
+    claude-notify <command>
+
+COMMANDS:
+    install       Install hooks to Claude Code settings
+    uninstall     Remove hooks from Claude Code settings
+    config        Edit configuration file
+    status        Show current status and configuration
+    enable        Enable notifications
+    disable       Disable notifications
+    test          Send test notification
+    help          Show this help message
+
+CONFIG:
+    ~/.claude-notify/config.json
+
+EXAMPLES:
+    claude-notify install          # Install and setup
+    claude-notify status           # Check status
+    claude-notify test             # Test notification
+    claude-notify config           # Edit settings
+
+For more information, visit: https://github.com/yourusername/claude-notify
+HELP
+}
+
+# Main
+case "${1:-}" in
+    install)
+        install_hooks
+        ;;
+    uninstall)
+        uninstall_hooks
+        ;;
+    config)
+        edit_config
+        ;;
+    status)
+        show_status
+        ;;
+    enable)
+        enable_notifications
+        ;;
+    disable)
+        disable_notifications
+        ;;
+    test)
+        test_notification
+        ;;
+    help|--help|-h)
+        show_help
+        ;;
+    *)
+        print_msg "$RED" "❌ Unknown command: ${1:-}"
+        echo ""
+        show_help
+        exit 1
+        ;;
+esac
