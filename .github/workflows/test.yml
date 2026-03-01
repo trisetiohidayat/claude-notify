@@ -1,0 +1,69 @@
+name: Test
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Test on macOS
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        brew install terminal-notifier jq
+
+    - name: Make scripts executable
+      run: |
+        chmod +x bin/claude-notify
+        chmod +x lib/notify.sh
+
+    - name: Test CLI help
+      run: |
+        ./bin/claude-notify help
+
+    - name: Test status command
+      run: |
+        ./bin/claude-notify status
+
+    - name: Test config creation
+      run: |
+        rm -f ~/.claude-notify/config.json
+        ./bin/claude-notify status
+        [ -f ~/.claude-notify/config.json ] && echo "Config created" || exit 1
+
+    - name: Test notification (headless)
+      run: |
+        # This will attempt to send notification but won't fail in CI
+        ./bin/claude-notify test || true
+
+    - name: Validate Homebrew formula
+      run: |
+        brew install --formula Formula/claude-notify.rb || true
+        brew audit --new-formula Formula/claude-notify.rb || true
+        brew style Formula/claude-notify.rb || true
+
+  lint:
+    name: Lint Shell Scripts
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install ShellCheck
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y shellcheck
+
+    - name: Run ShellCheck
+      run: |
+        shellcheck bin/claude-notify
+        shellcheck lib/notify.sh

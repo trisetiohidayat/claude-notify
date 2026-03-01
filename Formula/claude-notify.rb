@@ -18,16 +18,12 @@ class ClaudeNotify < Formula
   end
 
   def post_install
-    # Create config directory and copy default config if not exists
     config_dir = Dir.home/".claude-notify"
     config_file = config_dir/"config.json"
     default_config = etc/"claude-notify-default.json"
 
     config_dir.mkpath
     cp default_config, config_file unless config_file.exist?
-
-    # Make scripts executable
-    chmod 0755, bin/"claude-notify"
   end
 
   test do
