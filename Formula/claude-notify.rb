@@ -3,9 +3,9 @@
 
 class ClaudeNotify < Formula
   desc "Desktop notifications for Claude Code"
-  homepage "https://github.com/yourusername/claude-notify"
-  url "https://github.com/yourusername/claude-notify/archive/refs/tags/v1.0.0.tar.gz"
-  sha256 "PLACEHOLDER_SHA256"
+  homepage "https://github.com/trisetiohidayat/claude-notify"
+  url "https://github.com/trisetiohidayat/claude-notify/archive/refs/tags/v1.0.0.tar.gz"
+  sha256 "977409ba258c0a024b88c016d776eb260f27004ac03e82db3ff98489223d4977"
   license "MIT"
 
   depends_on "terminal-notifier"
